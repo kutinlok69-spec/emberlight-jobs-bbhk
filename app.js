@@ -34,7 +34,7 @@ const KEY = "emberlight-job-sim-v1";
 const S = {
   tab: "jobs", line: "", job: "paladin", skillJob: "paladin", skill: "",
   q: "", show: 10, over: 10, lv: 80, a: "paladin", b: "darkknight",
-  allocA: {}, allocB: {}
+  allocA: {}, allocB: {}, wjob: "all", wid: "", ref: 0
 };
 S.skill = (BYJOB.paladin && BYJOB.paladin[0].id) || DATA.skills[0].id;
 
@@ -253,7 +253,11 @@ function readHash() {
     applyPack(S.allocA, p[4] || "");
     applyPack(S.allocB, p[5] || "");
     S.tab = "sim";
-  } else if (h === "skills" || h === "jobs" || h === "sim") S.tab = h;
+  } else if (h === "gear" || h.startsWith("gear/")) {
+    S.tab = "gear";
+    const id = h.slice(5);
+    if (id && window.WEAPONS && WEAPONS.weapons.some((w) => w.id === id)) S.wid = id;
+  } else if (h === "skills" || h === "jobs" || h === "sim" || h === "gear") S.tab = h;
 }
 function loadStore() {
   try {
@@ -283,7 +287,7 @@ function playTag(j) {
   return "<span class=\"tag " + esc(j.play) + "\">" + esc(j.playName) + "</span>";
 }
 function navHTML() {
-  const tabs = [["jobs", "職業"], ["skills", "技能"], ["sim", "轉職模擬"]];
+  const tabs = [["jobs", "職業"], ["skills", "技能"], ["sim", "轉職模擬"], ["gear", "首領武器"]];
   return tabs.map(([id, name]) => "<button type=\"button\" data-tab=\"" + id + "\" class=\"" + (S.tab === id ? "on" : "") + "\">" + name + "</button>").join("");
 }
 
@@ -336,6 +340,7 @@ function jobDetail(j) {
     + (j.armorDesc ? "<p class=\"muted\">" + esc(j.armorDesc) + "</p>" : "")
     + "<p><b>轉職條件。</b>" + esc(req) + "</p>"
     + "<p class=\"muted\">過了下一階的等級還沒轉，經驗和技能升級點數都變成 3 倍。正式轉職會保留已學的技能，技能點 +3，並學會新職業的第一招。</p>"
+    + "<div class=\"rowbtns\"><button type=\"button\" class=\"btn tiny\" data-gearjob=\"" + j.id + "\">這個職業的首領武器</button></div>"
     + "<h3 class=\"sec\">這一階的技能</h3><div class=\"rowbtns\">" + skills + "</div>"
     + "<p class=\"muted\">角色會連同前面每一階的技能一起帶著。點技能看 1 到 10 級的數字。</p>"
     + (parent || kids ? "<h3 class=\"sec\">路線</h3><div class=\"rowbtns\">" + parent + kids + "</div>" : "")
@@ -591,9 +596,74 @@ function bump(which, id, dir) {
   }
 }
 
+function weaponsFor(jobId) {
+  const list = (window.WEAPONS && WEAPONS.weapons) || [];
+  if (!jobId || jobId === "all") return list;
+  const job = JOB[jobId];
+  if (!job || job.id === "adventurer") return list;
+  const ok = new Set(job.weapons || []);
+  return list.filter((w) => ok.has(w.fam));
+}
+function pctText(x) {
+  const n = Math.round(x * 10000) / 100;
+  return String(n).replace(/\.0$/, "").replace(/(\.\d)0$/, "$1");
+}
+function goldText(n) {
+  return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+}
+function gearLine(k, v) {
+  if (STATN[k]) return STATN[k] + " +" + v;
+  if (k === "sp") return "魔力 +" + v;
+  if (k === "atk" || k === "matk") return (STAT[k] ? STAT[k][0] : k) + " " + v;
+  if (STAT[k]) return STAT[k][0] + " +" + r1(v) + STAT[k][1];
+  return k + " " + v;
+}
+function gearBits(stats) {
+  const order = ["atk", "matk", "hp", "sp", "def", "mdef", "str", "agi", "vit", "int", "dex", "luk", "hit", "flee", "crit", "critDmg", "aspdPct", "expPct", "dropPct"];
+  return order.filter((k) => stats[k]).map((k) => gearLine(k, stats[k]));
+}
+function viewGear() {
+  if (!window.WEAPONS) return "<p>找不到首領武器資料。</p>";
+  const ref = Math.max(0, Math.min(WEAPONS.max, S.ref || 0));
+  const list = weaponsFor(S.wjob);
+  const w = list.find((x) => x.id === S.wid) || list[0];
+  const opts = "<option value=\"all\"" + (S.wjob === "all" ? " selected" : "") + ">全部職業</option>" + jobOptions(S.wjob === "all" ? "" : S.wjob);
+  const cards = list.map((x) => {
+    const on = w && x.id === w.id ? " on" : "";
+    const st = x.levels[ref].stats;
+    return "<button type=\"button\" class=\"card" + on + "\" data-wid=\"" + x.id + "\"><b>" + esc(x.name) + "</b><span>" + esc(x.fam) + " · " + esc(x.mapName) + "</span><span>物攻 " + (st.atk || 0) + (st.matk ? " · 魔攻 " + st.matk : "") + "</span></button>";
+  }).join("");
+  return "<div class=\"panel\"><div class=\"lvbox\"><label>職業 <select id=\"wjob\" aria-label=\"職業\">" + opts + "</select></label>"
+    + "<label>強化 <input id=\"ref\" type=\"number\" min=\"0\" max=\"" + WEAPONS.max + "\" value=\"" + ref + "\"></label>"
+    + "<input id=\"refRange\" type=\"range\" min=\"0\" max=\"" + WEAPONS.max + "\" value=\"" + ref + "\" aria-label=\"強化等級\">"
+    + "<b id=\"refLive\">+" + ref + "</b></div>"
+    + "<p class=\"muted\">數字是" + esc(WEAPONS.rarity) + "品質，首領掉出來就是這個品質。武器每強化 1 級，物攻和魔攻 +" + Math.round(WEAPONS.per * 100) + "%。詞條不加這一段。+6 以內一定成功。+7 起失敗會碎，除非用防爆符。+9 起另外加最後攻擊，乘在算出來的物攻和魔攻外面。</p></div>"
+    + (cards ? "<div class=\"grid\" style=\"margin-top:12px\">" + cards + "</div>" : "<p>這個職業沒有對應的首領武器。</p>")
+    + (w ? weaponDetail(w, ref) : "");
+}
+function weaponDetail(w, ref) {
+  const lv = w.levels[ref];
+  const users = DATA.jobs.filter((j) => j.id !== "adventurer" && (j.weapons || []).includes(w.fam)).map((j) => j.name);
+  const rows = w.levels.map((row, i) => {
+    const risk = i >= WEAPONS.safe ? "失敗會碎" : "一定成功";
+    const step = i < WEAPONS.max ? "升到 +" + (i + 1) + "：" + pctText(row.nextRate) + "%，" + goldText(row.nextCost) + " 金幣，" + risk : "已滿";
+    return "<tr class=\"" + (i === ref ? "sel" : "") + "\"><td>+" + i + "</td><td>" + esc(gearBits(row.stats).join("、")) + (row.hi ? "；最後攻擊 +" + row.hi + "%" : "") + "</td><td>" + esc(step) + "</td></tr>";
+  }).join("");
+  const reach = Math.round(w.range / 10);
+  const extra = [w.shield ? "可以同時拿盾" : "", w.dual ? "普攻再補一刀，第二刀是普攻的 " + Math.round(w.dual * 100) + "%" : ""].filter(Boolean).join("。");
+  return "<article class=\"panel\" id=\"detail\"><h2>" + esc(w.name) + " <span class=\"muted\">+" + ref + " · " + esc(w.fam) + "</span></h2>"
+    + "<p>" + esc(w.lore) + "</p>"
+    + "<p><b>怎麼拿到。</b> 線上打倒「" + esc(w.mapName) + "」的首領「" + esc(w.boss) + "」。這張圖的怪大約 " + w.lv[0] + "～" + w.lv[1] + " 級，武器需求 Lv." + w.req + "。離線不掉首領的東西。</p>"
+    + "<p class=\"muted\">沒開尋寶時，這張圖掉出一件專屬的機率是 " + pctText(w.mapRate) + "%。" + w.pool + " 件專屬共用這一次，掉到才隨機抽，這把大約 " + pctText(w.mapRate / w.pool) + "%。尋寶卷 +50%、高級尋寶藥水 +100% 會乘上去。掉出來是" + esc(WEAPONS.rarity) + "。</p>"
+    + "<p>現在 +" + ref + "：" + esc(gearBits(lv.stats).join("、")) + (lv.hi ? "。最後攻擊 +" + lv.hi + "%。" : "。") + "</p>"
+    + "<p class=\"muted\">攻速係數 ×" + w.aspd + "，射程 " + reach + " 格。" + esc(extra) + "</p>"
+    + "<p class=\"muted\">能用的職業：" + esc(users.join("、")) + "。冒險者什麼武器都能拿。</p>"
+    + "<div class=\"tree-wrap\"><table><thead><tr><th>強化</th><th>這一級的數字</th><th>再升一級</th></tr></thead><tbody>" + rows + "</tbody></table></div></article>";
+}
 function view() {
   if (S.tab === "skills") return viewSkills();
   if (S.tab === "sim") return viewSim();
+  if (S.tab === "gear") return viewGear();
   return viewJobs();
 }
 function render(opt) {
@@ -615,7 +685,7 @@ function render(opt) {
   if (opt && opt.scroll) document.getElementById("detail")?.scrollIntoView({ block: "start" });
 }
 function onClick(e) {
-  const t = e.target.closest("[data-tab],[data-line],[data-job],[data-openskill],[data-skilljob],[data-show],[data-up],[data-down],[data-max],[data-clear],[data-fill],[data-swap],#copy");
+  const t = e.target.closest("[data-tab],[data-line],[data-job],[data-openskill],[data-skilljob],[data-show],[data-up],[data-down],[data-max],[data-clear],[data-fill],[data-swap],[data-wid],[data-gearjob],#copy");
   if (!t) return;
   if (t.dataset.tab) {
     S.tab = t.dataset.tab;
@@ -626,6 +696,21 @@ function onClick(e) {
   if (t.dataset.line !== undefined && t.hasAttribute("data-line")) {
     S.line = t.dataset.line;
     render();
+    return;
+  }
+  if (t.dataset.gearjob) {
+    S.tab = "gear";
+    S.wjob = t.dataset.gearjob;
+    S.wid = "";
+    setHash("gear", false);
+    render();
+    return;
+  }
+  if (t.dataset.wid) {
+    S.wid = t.dataset.wid;
+    S.tab = "gear";
+    setHash("gear/" + S.wid, true);
+    render({ scroll: true });
     return;
   }
   if (t.dataset.job) {
@@ -710,6 +795,18 @@ function onChange(e) {
     render();
     return;
   }
+  if (t.id === "wjob") {
+    S.wjob = t.value;
+    S.wid = "";
+    render();
+    return;
+  }
+  if (t.id === "ref" || t.id === "refRange") {
+    const n = Math.max(0, Math.min(window.WEAPONS ? WEAPONS.max : 15, parseInt(t.value, 10) || 0));
+    S.ref = n;
+    render();
+    return;
+  }
   if (t.id === "over") {
     S.over = Math.max(1, Math.min(100, parseInt(t.value, 10) || 1));
     S.show = S.over;
@@ -729,12 +826,19 @@ function onInput(e) {
     render();
     return;
   }
+  if (e.target.id === "refRange") {
+    const label = document.getElementById("ref");
+    const live = document.getElementById("refLive");
+    if (label) label.value = e.target.value;
+    if (live) live.textContent = "+" + e.target.value;
+    return;
+  }
   if (e.target.id === "lvRange") {
     const label = document.getElementById("lv");
     if (label) label.value = e.target.value;
   }
 }
-document.getElementById("ver").textContent = "客戶端 " + DATA.version + " · " + DATA.captured + " · 57 職 · " + DATA.skills.length + " 招";
+document.getElementById("ver").textContent = "客戶端 " + DATA.version + " · " + DATA.captured + " · 57 職 · " + DATA.skills.length + " 招" + (window.WEAPONS ? " · " + WEAPONS.weapons.length + " 把首領武器" : "");
 document.getElementById("foot").textContent = "數字來自 emberlight.isekaifish.com 的遊戲客戶端，不是官方工具。遊戲改版以後若跟遊戲裡的技能說明不同，以遊戲內為準。";
 app.addEventListener("click", onClick);
 app.addEventListener("change", onChange);
