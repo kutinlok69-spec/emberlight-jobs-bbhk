@@ -35,7 +35,10 @@ const S = {
   tab: "jobs", line: "", job: "paladin", skillJob: "paladin", skill: "",
   q: "", show: 10, over: 10, lv: 80, a: "paladin", b: "darkknight",
   allocA: {}, allocB: {}, wjob: "all", wid: "", ref: 0,
-  capAspd: 3.2, capLv: 80, capHit: 0, capKind: "melee", capCrit: 40, capRank: "boss"
+  capAspd: 3.2, capLv: 80, capHit: 0, capKind: "melee", capCrit: 40, capRank: "boss",
+  stLv: 80, stJob: "paladin",
+  pts: { str: 5, agi: 5, vit: 5, int: 5, dex: 5, luk: 5 },
+  rfFrom: 6, rfTo: 10, rfTier: 9, rfKind: "weapon", rfBless: false, rfDust: false, rfCharm: "none"
 };
 S.skill = (BYJOB.paladin && BYJOB.paladin[0].id) || DATA.skills[0].id;
 
@@ -258,7 +261,7 @@ function readHash() {
     S.tab = "gear";
     const id = h.slice(5);
     if (id && window.WEAPONS && WEAPONS.weapons.some((w) => w.id === id)) S.wid = id;
-  } else if (h === "skills" || h === "jobs" || h === "sim" || h === "gear" || h === "caps") S.tab = h;
+  } else if (h === "skills" || h === "jobs" || h === "sim" || h === "gear" || h === "caps" || h === "stats" || h === "refine") S.tab = h;
 }
 function loadStore() {
   try {
@@ -288,7 +291,7 @@ function playTag(j) {
   return "<span class=\"tag " + esc(j.play) + "\">" + esc(j.playName) + "</span>";
 }
 function navHTML() {
-  const tabs = [["jobs", "職業"], ["skills", "技能"], ["sim", "轉職模擬"], ["gear", "首領武器"], ["caps", "封頂"]];
+  const tabs = [["jobs", "職業"], ["skills", "技能"], ["sim", "轉職模擬"], ["gear", "首領武器"], ["caps", "封頂"], ["stats", "配點"], ["refine", "強化機率"]];
   return tabs.map(([id, name]) => "<button type=\"button\" data-tab=\"" + id + "\" class=\"" + (S.tab === id ? "on" : "") + "\">" + name + "</button>").join("");
 }
 
@@ -743,11 +746,174 @@ function viewCaps() {
     + (raw >= critNeed ? " 抗暴扣完仍是 80%，再堆暴擊不會更高。" : " 要讓抗暴之後仍是 80%，原始暴擊要到 " + critNeed + "%。面板在 80% 就不再往上寫，所以看起來滿了，打首領還可能沒滿。")
     + "</p><p class=\"muted\">打怪時先用沒有套 80% 的原始值減抗暴，再套 80%。小怪和菁英抗暴都是 5。暴擊傷害在競技場封頂 170%。野外沒有寫這個上限。</p></article>";
 }
+const STAT_KEYS = ["str", "agi", "vit", "int", "dex", "luk"];
+const WASPD = { "單手劍": 1, "雙手大劍": 0.8, "雙短刃": 1.3, "弓": 0.95, "火銃": 1.15, "法杖": 0.85, "魔導書": 0.85, "權杖": 0.9, "戰錘": 0.85, "獸鞭": 1, "樂器": 0.95, "卡牌": 1.1, "操偶架": 1, "拳套": 1.25, "長槍": 0.85, "巨斧": 0.75 };
+const TIER_NAMES = ["晨露", "低語", "珊瑚", "赤砂", "腐沼", "迴音", "蒼鷹", "霜語", "永凍", "熔心", "遺忘", "亡者", "星晶", "浮空", "菌光", "沉沒", "齒輪", "深淵", "虛空", "天穹"];
+const REFINE_RATES = [1, 1, 1, 1, 1, 1, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.12, 0.07, 0.04];
+const SCROLL_GOLD = { weapon: 70000, armor: 40000, acc: 50000 };
+function pointBudget(lv) {
+  let n = 20;
+  for (let L = 2; L <= lv; L++) n += 5 + (L % 10 === 0 ? 1 : 0);
+  return n;
+}
+function pointCost(v) { return 1 + Math.floor(v / 30); }
+function pointsSpent() {
+  let n = 0;
+  for (const k of STAT_KEYS) for (let v = 5; v < (S.pts[k] || 5); v++) n += pointCost(v);
+  return n;
+}
+function viewStats() {
+  const lv = Math.max(1, Math.min(150, S.stLv | 0));
+  const job = JOB[S.stJob] || JOB.paladin;
+  const budget = pointBudget(lv);
+  const used = pointsSpent();
+  const left = budget - used;
+  const fam = (job.weapons || [])[0] || "單手劍";
+  const ranged = ["弓", "火銃", "卡牌"].includes(fam);
+  const mainName = job.magic ? "智力" : ranged ? "靈巧" : "力量";
+  const st = S.pts;
+  const main = ranged ? st.dex : st.str;
+  const sub = ranged ? st.str : st.dex;
+  const atk = (job.magic ? st.str * 0.5 + st.dex * 0.5 : main * 2 + sub * 0.5) + lv;
+  const matk = st.int * 2.4 + lv;
+  const hp = (80 + 18 * lv + 12 * st.vit + 0.35 * lv * st.vit) * job.hp;
+  const sp = (20 + 3.5 * lv + 6 * st.int + 0.1 * lv * st.int) * job.sp;
+  const aspd = Math.min(4, job.aspd * (WASPD[fam] || 1) * (1 + st.agi * 0.01 + st.dex * 0.002));
+  const hits = aspdReal(aspd).hits;
+  const rows = STAT_KEYS.map((k) => {
+    const v = st[k];
+    const cost = v >= 200 ? 0 : pointCost(v);
+    const upLock = v >= 200 || left < cost;
+    const downLock = v <= 5;
+    return "<div class=\"sk\"><div class=\"nm\"><b>" + esc(STATN[k]) + "</b><span class=\"muted\">下一點 " + (v >= 200 ? "已滿" : cost + " 點能力") + "</span></div><div class=\"ops\">"
+      + "<button type=\"button\" class=\"btn tiny\" data-pt=\"" + k + "\" data-pd=\"-1\"" + (downLock ? " disabled" : "") + ">−</button><b>" + v + "</b>"
+      + "<button type=\"button\" class=\"btn tiny\" data-pt=\"" + k + "\" data-pd=\"1\"" + (upLock ? " disabled" : "") + ">+</button></div></div>";
+  }).join("");
+  return "<article class=\"panel\"><h2>配點</h2>"
+    + "<div class=\"lvbox\"><label>等級 <input id=\"stLv\" type=\"number\" min=\"1\" max=\"150\" value=\"" + lv + "\"></label>"
+    + "<label>職業 <select id=\"stJob\" aria-label=\"職業\">" + jobOptions(S.stJob) + "</select></label>"
+    + "<button type=\"button\" class=\"btn tiny\" data-ptreset>回到各 5</button>"
+    + "<button type=\"button\" class=\"btn tiny\" data-ptpour>把剩下的點灌進" + esc(mainName) + "</button></div>"
+    + "<p class=\"remain\">剩餘 <b class=\"" + (left < 0 ? "bad" : "good") + "\">" + left + "</b> <span class=\"muted\">／ " + budget + "，已用 " + used + "</span></p>"
+    + "<p class=\"muted\">一開始六維各 5，另外 20 點。2 級起每級 5 點，10 的倍數那一級再多 1 點。現在這一維是 v 時，再加 1 要花 1 ＋ floor(v ÷ 30) 點。每維最高 200。秘藥每維另加最多 50，不花這些點，這裡沒算進去。</p>"
+    + rows
+    + "<h3 class=\"sec\">這些點算出來的面板，不含裝備</h3>"
+    + "<div class=\"kv\">"
+    + "<div><b>物攻</b><br>" + Math.round(atk) + "</div><div><b>魔攻</b><br>" + Math.round(matk) + "</div>"
+    + "<div><b>生命</b><br>" + Math.round(hp) + "</div><div><b>魔力</b><br>" + Math.round(sp) + "</div>"
+    + "<div><b>物防</b><br>" + Math.round(st.vit * 0.8 + lv * 0.3) + "</div><div><b>魔防</b><br>" + Math.round(st.int * 0.5 + st.vit * 0.3) + "</div>"
+    + "<div><b>攻速</b><br>" + aspd.toFixed(2) + "，實際約 " + hits.toFixed(2) + " 下／秒</div>"
+    + "<div><b>命中</b><br>" + Math.round(80 + lv + st.dex * 1.5 + st.luk * 0.3) + "</div>"
+    + "<div><b>迴避</b><br>" + Math.round(50 + lv + st.agi * 1.4 + st.luk * 0.3) + "</div>"
+    + "<div><b>暴擊</b><br>" + Math.min(80, Math.round((1 + st.luk * 0.3) * 10) / 10) + "%</div>"
+    + "<div><b>暴傷</b><br>" + (Math.round((150 + st.str * 0.1) * 10) / 10) + "%</div>"
+    + "</div><p class=\"muted\">主武器先看" + esc(fam) + "，所以主攻擊能力是" + esc(mainName) + "。弓、火銃、卡牌的物攻吃靈巧，其他吃力量。職業血量 ×" + job.hp + "、魔力 ×" + job.sp + "、基礎攻速 ×" + job.aspd + "。攻速到 3.64 以後，實際次數停在每秒 3.33 下。</p></article>";
+}
+function refineFee(tier, lv) {
+  return Math.round((80 + tier * 42) * (1 + lv * 0.5)) + (lv >= 6 ? tier * 10000 * (lv - 5) : 0);
+}
+function luckAdd(lv) { return lv >= 11 ? 0.03 : 0.05; }
+function stepRate(lv, bless, dust) {
+  let r = REFINE_RATES[lv] || 0;
+  if (bless && lv >= 6) r += luckAdd(lv);
+  if (dust && lv >= 6) r += luckAdd(lv);
+  return Math.min(1, r);
+}
+function stepOutcomes(lv, bless, dust, charm) {
+  const rate = stepRate(lv, bless, dust);
+  const out = [];
+  if (bless && lv < 6) {
+    for (const add of [1, 2, 3]) out.push({ p: rate / 3, to: Math.min(15, lv + add) });
+  } else out.push({ p: rate, to: Math.min(15, lv + 1) });
+  const fail = 1 - rate;
+  if (fail <= 1e-12) return out;
+  let to = -1;
+  if (charm === "charm3" || (charm === "charm2" && lv <= 10)) to = lv;
+  else if (charm === "charm" || charm === "charm2") to = Math.max(0, lv - 1);
+  out.push({ p: fail, to });
+  return out;
+}
+function solveSystem(A) {
+  const n = A.length;
+  for (let col = 0; col < n; col++) {
+    let piv = col;
+    for (let r = col + 1; r < n; r++) if (Math.abs(A[r][col]) > Math.abs(A[piv][col])) piv = r;
+    const tmp = A[col]; A[col] = A[piv]; A[piv] = tmp;
+    const div = A[col][col] || 1e-12;
+    for (let c = col; c <= n; c++) A[col][c] /= div;
+    for (let r = 0; r < n; r++) if (r !== col) {
+      const f = A[r][col];
+      if (!f) continue;
+      for (let c = col; c <= n; c++) A[r][c] -= f * A[col][c];
+    }
+  }
+  return A.map((row) => row[n]);
+}
+function expectRefine(from, to, opts) {
+  if (from >= to) return { p: 1, attempts: 0, gold: 0, dust: 0, charms: 0 };
+  const n = to;
+  function build(costFn, prob) {
+    const A = Array.from({ length: n }, () => Array(n + 1).fill(0));
+    for (let i = 0; i < n; i++) {
+      A[i][i] = 1;
+      let jump = 0;
+      for (const o of stepOutcomes(i, opts.bless, opts.dust, opts.charm)) {
+        if (o.to >= to) jump += o.p;
+        else if (o.to >= 0) A[i][o.to] -= o.p;
+      }
+      A[i][n] = prob ? jump : costFn(i);
+    }
+    return solveSystem(A);
+  }
+  const scroll = opts.bless ? 0 : (SCROLL_GOLD[opts.kind] || 0);
+  return {
+    p: build(null, true)[from],
+    attempts: build(() => 1, false)[from],
+    gold: build((i) => refineFee(opts.tier, i) + scroll, false)[from],
+    dust: build((i) => (opts.dust && i >= 6 ? 1 : 0), false)[from],
+    charms: build(() => (opts.charm === "none" ? 0 : 1), false)[from],
+  };
+}
+function viewRefine() {
+  const from = Math.max(0, Math.min(15, S.rfFrom | 0));
+  const to = Math.max(0, Math.min(15, S.rfTo | 0));
+  const tier = Math.max(0, Math.min(19, S.rfTier | 0));
+  const opts = { bless: !!S.rfBless, dust: !!S.rfDust, charm: S.rfCharm || "none", kind: S.rfKind || "weapon", tier };
+  const exp = expectRefine(from, to, opts);
+  const rateRows = [];
+  for (let lv = 0; lv < 15; lv++) {
+    const rate = stepRate(lv, opts.bless, opts.dust);
+    const fail = lv < 6 ? "不會失敗" : opts.charm === "charm3" || (opts.charm === "charm2" && lv <= 10) ? "停在原地" : opts.charm === "none" ? "裝備碎掉" : "掉 1 級";
+    const extra = opts.bless && lv < 6 ? "，成功時 +1／+2／+3 各三分之一" : "";
+    rateRows.push("<tr" + (lv === from ? " class=\"sel\"" : "") + "><td>+" + lv + " → +" + (lv + 1) + "</td><td>" + pctText(rate) + "%</td><td>" + goldText(refineFee(tier, lv)) + "</td><td>" + esc(fail + extra) + "</td></tr>");
+  }
+  const tiers = TIER_NAMES.map((name, i) => "<option value=\"" + i + "\"" + (i === tier ? " selected" : "") + ">" + esc(name) + " · 需求 Lv." + (1 + 7 * i) + "</option>").join("");
+  const reached = from >= to;
+  return "<article class=\"panel\"><h2>強化機率</h2>"
+    + "<div class=\"lvbox\"><label>從 +<input id=\"rfFrom\" type=\"number\" min=\"0\" max=\"15\" value=\"" + from + "\"></label>"
+    + "<label>到 +<input id=\"rfTo\" type=\"number\" min=\"0\" max=\"15\" value=\"" + to + "\"></label>"
+    + "<label>裝備 <select id=\"rfTier\" aria-label=\"裝備階級\">" + tiers + "</select></label>"
+    + "<select id=\"rfKind\" aria-label=\"卷軸種類\"><option value=\"weapon\"" + (opts.kind === "weapon" ? " selected" : "") + ">武器卷 7 萬</option><option value=\"acc\"" + (opts.kind === "acc" ? " selected" : "") + ">飾品卷 5 萬</option><option value=\"armor\"" + (opts.kind === "armor" ? " selected" : "") + ">防具卷 4 萬</option></select></div>"
+    + "<div class=\"lvbox\"><label><input id=\"rfBless\" type=\"checkbox\"" + (opts.bless ? " checked" : "") + "> 祝福卷</label>"
+    + "<label><input id=\"rfDust\" type=\"checkbox\"" + (opts.dust ? " checked" : "") + "> 幸運星砂</label>"
+    + "<select id=\"rfCharm\" aria-label=\"防爆符\"><option value=\"none\"" + (opts.charm === "none" ? " selected" : "") + ">不用符，失敗碎掉</option><option value=\"charm\"" + (opts.charm === "charm" ? " selected" : "") + ">守護之符，失敗掉 1 級</option><option value=\"charm2\"" + (opts.charm === "charm2" ? " selected" : "") + ">高級防爆符，+10 以下不動</option><option value=\"charm3\"" + (opts.charm === "charm3" ? " selected" : "") + ">完美防爆符，失敗不動</option></select></div>"
+    + (reached ? "<p>起點已經不低於目標。</p>" : "<div class=\"kv\">"
+      + "<div><b>到達機率</b><br>" + pctText(exp.p) + "%</div>"
+      + "<div><b>期望次數</b><br>" + (Math.round(exp.attempts * 10) / 10) + "</div>"
+      + "<div><b>期望金幣</b><br>" + goldText(Math.round(exp.gold)) + "</div>"
+      + "<div><b>期望卷軸</b><br>" + (Math.round(exp.attempts * 10) / 10) + "</div>"
+      + "<div><b>期望星砂</b><br>" + (Math.round(exp.dust * 10) / 10) + "</div>"
+      + "<div><b>期望符</b><br>" + (Math.round(exp.charms * 10) / 10) + "</div></div>")
+    + "<p class=\"muted\">期望是衝到目標，或中途碎掉為止，平均花掉的東西。不用符時，到達機率不是 100%。有符就不會碎，機率會到 100%，次數是平均要試幾次。祝福卷在 +6 以下每次成功有三分之一機率 +1、+2 或 +3，可能跳過中間。+6 以上祝福卷只加成功率，不加級數。星砂和祝福卷在衝 +7 到 +11 各 +5%，衝 +12 到 +15 各 +3%，兩個一起加。+6 以內用不到星砂。普通卷軸的價錢算進金幣，祝福卷沒有標價，只算張數。符每次強化都扣，成功也扣。</p>"
+    + "<div class=\"tree-wrap\"><table><thead><tr><th>這一級</th><th>成功率</th><th>金幣</th><th>失敗</th></tr></thead><tbody>" + rateRows.join("") + "</tbody></table></div></article>";
+}
 function view() {
   if (S.tab === "skills") return viewSkills();
   if (S.tab === "sim") return viewSim();
   if (S.tab === "gear") return viewGear();
   if (S.tab === "caps") return viewCaps();
+  if (S.tab === "stats") return viewStats();
+  if (S.tab === "refine") return viewRefine();
   return viewJobs();
 }
 function render(opt) {
@@ -769,7 +935,7 @@ function render(opt) {
   if (opt && opt.scroll) document.getElementById("detail")?.scrollIntoView({ block: "start" });
 }
 function onClick(e) {
-  const t = e.target.closest("[data-tab],[data-line],[data-job],[data-openskill],[data-skilljob],[data-show],[data-up],[data-down],[data-max],[data-clear],[data-fill],[data-swap],[data-wid],[data-gearjob],#copy");
+  const t = e.target.closest("[data-tab],[data-line],[data-job],[data-openskill],[data-skilljob],[data-show],[data-up],[data-down],[data-max],[data-clear],[data-fill],[data-swap],[data-wid],[data-gearjob],[data-pt],[data-ptreset],[data-ptpour],#copy");
   if (!t) return;
   if (t.dataset.tab) {
     S.tab = t.dataset.tab;
@@ -779,6 +945,37 @@ function onClick(e) {
   }
   if (t.dataset.line !== undefined && t.hasAttribute("data-line")) {
     S.line = t.dataset.line;
+    render();
+    return;
+  }
+  if (t.dataset.pt) {
+    const k = t.dataset.pt;
+    const dir = Number(t.dataset.pd) || 0;
+    const v = S.pts[k] || 5;
+    if (dir < 0 && v > 5) S.pts[k] = v - 1;
+    if (dir > 0 && v < 200) {
+      const left = pointBudget(Math.max(1, Math.min(150, S.stLv | 0))) - pointsSpent();
+      if (left >= pointCost(v)) S.pts[k] = v + 1;
+    }
+    render();
+    return;
+  }
+  if (t.hasAttribute("data-ptreset")) {
+    for (const k of STAT_KEYS) S.pts[k] = 5;
+    render();
+    return;
+  }
+  if (t.hasAttribute("data-ptpour")) {
+    const job = JOB[S.stJob] || JOB.paladin;
+    const fam = (job.weapons || [])[0];
+    const key = job.magic ? "int" : ["弓", "火銃", "卡牌"].includes(fam) ? "dex" : "str";
+    for (let guard = 0; guard < 400; guard++) {
+      const v = S.pts[key];
+      if (v >= 200) break;
+      const left = pointBudget(Math.max(1, Math.min(150, S.stLv | 0))) - pointsSpent();
+      if (left < pointCost(v)) break;
+      S.pts[key] = v + 1;
+    }
     render();
     return;
   }
@@ -901,6 +1098,15 @@ function onChange(e) {
   if (t.id === "capKind") { S.capKind = t.value; render(); return; }
   if (t.id === "capCrit") { S.capCrit = Math.max(0, Number(t.value) || 0); render(); return; }
   if (t.id === "capRank") { S.capRank = t.value; render(); return; }
+  if (t.id === "stLv") { S.stLv = Math.max(1, Math.min(150, parseInt(t.value, 10) || 1)); render(); return; }
+  if (t.id === "stJob") { S.stJob = t.value; render(); return; }
+  if (t.id === "rfFrom") { S.rfFrom = Math.max(0, Math.min(15, parseInt(t.value, 10) || 0)); render(); return; }
+  if (t.id === "rfTo") { S.rfTo = Math.max(0, Math.min(15, parseInt(t.value, 10) || 0)); render(); return; }
+  if (t.id === "rfTier") { S.rfTier = Math.max(0, Math.min(19, parseInt(t.value, 10) || 0)); render(); return; }
+  if (t.id === "rfKind") { S.rfKind = t.value; render(); return; }
+  if (t.id === "rfBless") { S.rfBless = t.checked; render(); return; }
+  if (t.id === "rfDust") { S.rfDust = t.checked; render(); return; }
+  if (t.id === "rfCharm") { S.rfCharm = t.value; render(); return; }
   if (t.id === "over") {
     S.over = Math.max(1, Math.min(100, parseInt(t.value, 10) || 1));
     S.show = S.over;
