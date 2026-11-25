@@ -34,7 +34,8 @@ const KEY = "emberlight-job-sim-v1";
 const S = {
   tab: "jobs", line: "", job: "paladin", skillJob: "paladin", skill: "",
   q: "", show: 10, over: 10, lv: 80, a: "paladin", b: "darkknight",
-  allocA: {}, allocB: {}, wjob: "all", wid: "", ref: 0
+  allocA: {}, allocB: {}, wjob: "all", wid: "", ref: 0,
+  capAspd: 3.2, capLv: 80, capHit: 0, capKind: "melee", capCrit: 40, capRank: "boss"
 };
 S.skill = (BYJOB.paladin && BYJOB.paladin[0].id) || DATA.skills[0].id;
 
@@ -257,7 +258,7 @@ function readHash() {
     S.tab = "gear";
     const id = h.slice(5);
     if (id && window.WEAPONS && WEAPONS.weapons.some((w) => w.id === id)) S.wid = id;
-  } else if (h === "skills" || h === "jobs" || h === "sim" || h === "gear") S.tab = h;
+  } else if (h === "skills" || h === "jobs" || h === "sim" || h === "gear" || h === "caps") S.tab = h;
 }
 function loadStore() {
   try {
@@ -287,7 +288,7 @@ function playTag(j) {
   return "<span class=\"tag " + esc(j.play) + "\">" + esc(j.playName) + "</span>";
 }
 function navHTML() {
-  const tabs = [["jobs", "職業"], ["skills", "技能"], ["sim", "轉職模擬"], ["gear", "首領武器"]];
+  const tabs = [["jobs", "職業"], ["skills", "技能"], ["sim", "轉職模擬"], ["gear", "首領武器"], ["caps", "封頂"]];
   return tabs.map(([id, name]) => "<button type=\"button\" data-tab=\"" + id + "\" class=\"" + (S.tab === id ? "on" : "") + "\">" + name + "</button>").join("");
 }
 
@@ -660,10 +661,93 @@ function weaponDetail(w, ref) {
     + "<p class=\"muted\">能用的職業：" + esc(users.join("、")) + "。冒險者什麼武器都能拿。</p>"
     + "<div class=\"tree-wrap\"><table><thead><tr><th>強化</th><th>這一級的數字</th><th>再升一級</th></tr></thead><tbody>" + rows + "</tbody></table></div></article>";
 }
+function aspdReal(aspd) {
+  const shown = Math.min(4, Math.max(0.2, aspd));
+  const infoDur = 0.55;
+  const dur = infoDur / Math.max(1, infoDur * shown * 1.1);
+  let act = 0;
+  for (let t = 0; t < dur; t += 0.05) act++;
+  const cd = Math.ceil(1 / shown / 0.05 - 1e-9);
+  const ticks = Math.max(act + 1, cd);
+  return { shown, hits: 1 / (ticks * 0.05), ticks };
+}
+function monFlee(L, kind) {
+  if (kind === "magic") return null;
+  const raw = kind === "dex" ? 116 + 4.1 * L - 0.0081 * L * L : 92 + 1.33 * L;
+  return Math.round(raw);
+}
+function hitChance(hit, flee) {
+  return Math.min(1, Math.max(0.4, 0.88 + (hit - flee) / 250));
+}
+function viewCaps() {
+  const aspd = Math.max(0.2, Math.min(4, Number(S.capAspd) || 0));
+  const real = aspdReal(aspd);
+  const stopped = real.hits >= aspdReal(4).hits - 1e-9;
+  const L = Math.max(1, Math.min(150, S.capLv | 0));
+  const extra = Math.max(0, S.capHit | 0);
+  const kind = S.capKind || "melee";
+  const sheetHit = 80 + L + extra;
+  const flee = monFlee(L, kind);
+  let hitText;
+  if (L < 10 && kind !== "magic") {
+    hitText = "10 級以下的怪不套這套迴避。魔法攻擊本來就必中。";
+  } else if (kind === "magic") {
+    hitText = "魔法攻擊必中。面板上的命中不會讓法術更準，也不會讓它打空。";
+  } else {
+    const chance = hitChance(sheetHit, flee);
+    const full = flee + 30;
+    const floor = flee - 120;
+    const wall = chance >= 0.999 ? "已經打滿 100%。再堆命中，打這種怪不會更準。"
+      : chance <= 0.401 ? "已經貼在 40% 的地板。要先補到離開地板，命中才開始有用。"
+      : "還沒到頂。打滿 100% 要命中至少 " + full + "，也就是再補 " + Math.max(0, full - sheetHit) + "。低於 " + floor + " 就會貼在 40%。";
+    hitText = (kind === "dex" ? "弓、火銃、卡牌打到的怪，迴避比較高。" : "近戰和其他物理武器打到的怪，迴避比較低。")
+      + " 這隻 " + L + " 級怪的迴避是 " + flee + "。你的命中若只有等級那一段再加 " + extra + "，是 " + sheetHit + "，命中率 " + Math.round(chance * 1000) / 10 + "%。" + wall;
+  }
+  const raw = Math.max(0, Number(S.capCrit) || 0);
+  const resist = { normal: 5, elite: 5, boss: 10, world: 15 }[S.capRank] || 10;
+  const shownCrit = Math.min(80, raw);
+  const fightCrit = Math.min(80, Math.max(0, raw - resist));
+  const critNeed = 80 + resist;
+  return "<article class=\"panel\"><h2>哪裡有頂</h2>"
+    + "<p>有些數字會一直往上加，加到某個地方就不再讓你打得更快或更準。下面先列硬上限，再列「面板還在漲、實際已經停」的那幾項。</p>"
+    + "<div class=\"tree-wrap\"><table><thead><tr><th>項目</th><th>停在哪</th><th>停了以後</th></tr></thead><tbody>"
+    + "<tr><td>能力點</td><td>每一維 200</td><td>加點鈕會停。裝備、秘藥仍可再加，那不算在這 200 裡。</td></tr>"
+    + "<tr><td>秘藥</td><td>每一維 50</td><td>每點能力 +1，不用花能力點。</td></tr>"
+    + "<tr><td>面板攻速</td><td>4</td><td>公式先卡在 4。真正的普攻次數更早停，見下面。</td></tr>"
+    + "<tr><td>實際普攻</td><td>每秒 3.33 下</td><td>面板攻速 3.64 起就是這個次數，一直到 4 都不會再變快。</td></tr>"
+    + "<tr><td>暴擊率</td><td>面板 80%</td><td>打怪先扣抗暴，再套 80%。面板滿了以後，多出來的原始暴擊還能補抗暴。</td></tr>"
+    + "<tr><td>暴擊傷害</td><td>競技場 170%</td><td>野外這份客戶端沒有寫上限。力量每點仍 +0.1%。</td></tr>"
+    + "<tr><td>命中率</td><td>100%，最低 40%</td><td>命中比怪的迴避高 30 就滿。再低 120 就貼在 40%。魔法必中。</td></tr>"
+    + "<tr><td>大招冷卻減免</td><td>50%</td><td>七曜武器那條減冷卻，最多減一半。</td></tr>"
+    + "<tr><td>等級差</td><td>最多 10 級</td><td>你打出的傷害最低剩 50%，挨打最高 1.6 倍。16 級才開始，25 級起才算滿 10 級。</td></tr>"
+    + "<tr><td>強化</td><td>+15</td><td>武器每級物攻、魔攻 +7%。+9 起的最後攻擊另外算。</td></tr>"
+    + "<tr><td>物攻、魔攻、生命、防禦</td><td>沒有硬上限</td><td>防禦的減傷只會靠近 100%，到不了。減傷比例是 防禦 ÷（防禦 + 120 + 自己的等級 × 3）。</td></tr>"
+    + "<tr><td>掉寶、經驗、吸血、治療</td><td>沒有再設上限</td><td>幸運的掉寶、卷和藥水是相加。經驗祝福和經驗藥水也是相加。</td></tr>"
+    + "</tbody></table></div></article>"
+    + "<article class=\"panel\"><h2>攻速</h2>"
+    + "<div class=\"lvbox\"><label>面板攻速 <input id=\"capAspd\" type=\"number\" min=\"0.2\" max=\"4\" step=\"0.01\" value=\"" + aspd + "\"></label>"
+    + "<input id=\"capAspdRange\" type=\"range\" min=\"0.8\" max=\"4\" step=\"0.01\" value=\"" + aspd + "\" aria-label=\"面板攻速\"></div>"
+    + "<p>面板寫 <b>" + real.shown.toFixed(2) + "</b>。實際普攻約 <b>" + real.hits.toFixed(2) + "</b> 下／秒。"
+    + (stopped ? " 已經頂到每秒 3.33 下。再加敏捷或攻速%，次數不會增加。自動配點這時會把原本要點敏捷的點改點主能力。" : " 還沒到頂。3.64 以前，面板每高一截，次數還會跳一格。")
+    + "</p><p class=\"muted\">伺服器每 0.05 秒算一格。普攻要等冷卻湊滿整格，也要等動作播完的下一格。攻速高了以後，各種武器的動作都會被壓到同一種長度，所以劍、弓、槍都在 3.64 停在同一格：6 格、0.30 秒、每秒 3.33 下。面板上限 4 比這個實際天花板還高。</p></article>"
+    + "<article class=\"panel\"><h2>命中</h2>"
+    + "<div class=\"lvbox\"><label>怪的等級 <input id=\"capLv\" type=\"number\" min=\"1\" max=\"150\" value=\"" + L + "\"></label>"
+    + "<label>額外命中 <input id=\"capHit\" type=\"number\" min=\"0\" max=\"2000\" value=\"" + extra + "\"></label>"
+    + "<select id=\"capKind\" aria-label=\"攻擊種類\"><option value=\"melee\"" + (kind === "melee" ? " selected" : "") + ">近戰和其他物理</option><option value=\"dex\"" + (kind === "dex" ? " selected" : "") + ">弓、火銃、卡牌</option><option value=\"magic\"" + (kind === "magic" ? " selected" : "") + ">魔法</option></select></div>"
+    + "<p>" + esc(hitText) + "</p>"
+    + "<p class=\"muted\">命中率＝0.88 ＋（你的命中 − 怪的迴避）÷ 250，再卡在 40% 到 100%。怪的迴避不看你堆了多少迴避；近戰怪用 92 ＋ 1.33×等級，弓火銃卡牌打到的怪用 116 ＋ 4.1×等級 − 0.0081×等級²。10 級以下不套。你的命中＝80 ＋等級 ＋靈巧×1.5 ＋幸運×0.3 ＋額外命中。這裡的額外命中把靈巧和幸運也算進去，方便自己填。</p></article>"
+    + "<article class=\"panel\"><h2>暴擊</h2>"
+    + "<div class=\"lvbox\"><label>原始暴擊% <input id=\"capCrit\" type=\"number\" min=\"0\" max=\"300\" value=\"" + raw + "\"></label>"
+    + "<select id=\"capRank\" aria-label=\"怪物種類\"><option value=\"normal\"" + (S.capRank === "normal" ? " selected" : "") + ">小怪、菁英，抗暴 5</option><option value=\"boss\"" + (S.capRank === "boss" ? " selected" : "") + ">首領，抗暴 10</option><option value=\"world\"" + (S.capRank === "world" ? " selected" : "") + ">世界首領，抗暴 15</option></select></div>"
+    + "<p>面板寫 <b>" + shownCrit + "%</b>。打這隻怪是 <b>" + fightCrit + "%</b>。"
+    + (raw >= critNeed ? " 抗暴扣完仍是 80%，再堆暴擊不會更高。" : " 要讓抗暴之後仍是 80%，原始暴擊要到 " + critNeed + "%。面板在 80% 就不再往上寫，所以看起來滿了，打首領還可能沒滿。")
+    + "</p><p class=\"muted\">打怪時先用沒有套 80% 的原始值減抗暴，再套 80%。小怪和菁英抗暴都是 5。暴擊傷害在競技場封頂 170%。野外沒有寫這個上限。</p></article>";
+}
 function view() {
   if (S.tab === "skills") return viewSkills();
   if (S.tab === "sim") return viewSim();
   if (S.tab === "gear") return viewGear();
+  if (S.tab === "caps") return viewCaps();
   return viewJobs();
 }
 function render(opt) {
@@ -807,6 +891,16 @@ function onChange(e) {
     render();
     return;
   }
+  if (t.id === "capAspd" || t.id === "capAspdRange") {
+    S.capAspd = Math.max(0.2, Math.min(4, Number(t.value) || 0));
+    render();
+    return;
+  }
+  if (t.id === "capLv") { S.capLv = Math.max(1, Math.min(150, parseInt(t.value, 10) || 1)); render(); return; }
+  if (t.id === "capHit") { S.capHit = Math.max(0, parseInt(t.value, 10) || 0); render(); return; }
+  if (t.id === "capKind") { S.capKind = t.value; render(); return; }
+  if (t.id === "capCrit") { S.capCrit = Math.max(0, Number(t.value) || 0); render(); return; }
+  if (t.id === "capRank") { S.capRank = t.value; render(); return; }
   if (t.id === "over") {
     S.over = Math.max(1, Math.min(100, parseInt(t.value, 10) || 1));
     S.show = S.over;
@@ -824,6 +918,11 @@ function onInput(e) {
     if (composing) return;
     S.q = e.target.value;
     render();
+    return;
+  }
+  if (e.target.id === "capAspdRange") {
+    const label = document.getElementById("capAspd");
+    if (label) label.value = e.target.value;
     return;
   }
   if (e.target.id === "refRange") {
