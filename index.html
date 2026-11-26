@@ -138,7 +138,9 @@ const S = {
   capAspd: 3.2, capLv: 80, capHit: 0, capKind: "melee", capCrit: 40, capRank: "boss",
   stLv: 80, stJob: "paladin",
   pts: { str: 5, agi: 5, vit: 5, int: 5, dex: 5, luk: 5 },
-  rfFrom: 6, rfTo: 10, rfTier: 9, rfKind: "weapon", rfBless: false, rfDust: false, rfCharm: "none"
+  rfFrom: 6, rfTo: 10, rfTier: 9, rfKind: "weapon", rfBless: false, rfDust: false, rfCharm: "none",
+  afTier: 9, afLocks: 0, afDeep: false, afRarity: 3,
+  setTier: 9, setRarity: 4, setCount: 8, setRef: 9
 };
 S.skill = (BYJOB.paladin && BYJOB.paladin[0].id) || DATA.skills[0].id;
 
@@ -361,7 +363,7 @@ function readHash() {
     S.tab = "gear";
     const id = h.slice(5);
     if (id && window.WEAPONS && WEAPONS.weapons.some((w) => w.id === id)) S.wid = id;
-  } else if (h === "skills" || h === "jobs" || h === "sim" || h === "gear" || h === "caps" || h === "stats" || h === "refine" || h === "drops" || h === "patch") S.tab = h;
+  } else if (h === "skills" || h === "jobs" || h === "sim" || h === "gear" || h === "caps" || h === "stats" || h === "refine" || h === "drops" || h === "patch" || h === "affix" || h === "set") S.tab = h;
 }
 function loadStore() {
   try {
@@ -391,7 +393,7 @@ function playTag(j) {
   return "<span class=\"tag " + esc(j.play) + "\">" + esc(j.playName) + "</span>";
 }
 function navHTML() {
-  const tabs = [["jobs", "職業"], ["skills", "技能"], ["sim", "轉職模擬"], ["gear", "首領武器"], ["caps", "封頂"], ["stats", "配點"], ["refine", "強化機率"], ["drops", "掉落"], ["patch", "更新"]];
+  const tabs = [["jobs", "職業"], ["skills", "技能"], ["sim", "轉職模擬"], ["gear", "首領武器"], ["caps", "封頂"], ["stats", "配點"], ["refine", "強化機率"], ["drops", "掉落"], ["patch", "更新"], ["affix", "洗鍊"], ["set", "套裝"]];
   return tabs.map(([id, name]) => "<button type=\"button\" data-tab=\"" + id + "\" class=\"" + (S.tab === id ? "on" : "") + "\">" + name + "</button>").join("");
 }
 
@@ -1112,7 +1114,107 @@ function view() {
   if (S.tab === "refine") return viewRefine();
   if (S.tab === "drops") return viewDrops();
   if (S.tab === "patch") return viewPatch();
+  if (S.tab === "affix") return viewAffix();
+  if (S.tab === "set") return viewSet();
   return viewJobs();
+}
+function effTierOf(t) {
+  if (t <= 10) return t;
+  const raw = (x) => 14 + 11.2 * x + 0.17 * x * x;
+  const v = raw(10) * (1.12 ** (t - 10));
+  return (-11.2 + Math.sqrt(11.2 * 11.2 - 4 * 0.17 * (14 - v))) / (2 * 0.17);
+}
+function affixSpan(max, pct) {
+  const round = (v) => (pct ? Math.round(v * 10) / 10 : Math.max(1, Math.round(v)));
+  return round(max * 0.5) + "～" + round(max) + (pct ? "%" : "");
+}
+function reforgeBill(tier, deep, locks) {
+  return Math.round((1000 + tier * 1000) * (deep ? 3 : 1) * (1 + locks * 0.5));
+}
+function qualityBill(tier, rarity) {
+  return (1000 + tier * 1000) * (rarity + 1) * 2;
+}
+const AFFIX_ROWS = [
+  ["力量、敏捷、體魄、智力、靈巧、幸運", (t) => 2 + 1.12 * t, false],
+  ["物攻、魔攻", (t) => 4 + 4.2 * t, false],
+  ["生命", (t) => 30 + 42 * t, false],
+  ["魔力", (t) => 8 + 8.4 * t, false],
+  ["物防、魔防", (t) => 3 + 2.1 * t, false],
+  ["命中、迴避", (t) => 3 + 1.4 * t, false],
+  ["暴擊率", (t) => 2 + 0.21 * t, true],
+  ["暴擊傷害", (t) => 5 + 0.84 * t, true],
+  ["攻速", (t) => 3 + 0.35 * t, true],
+  ["經驗", (t) => 3 + 0.42 * t, true],
+  ["掉寶率", (t) => 5 + 0.56 * t, true]
+];
+const RARITY_NAME = ["普通", "精良", "稀有", "史詩", "傳說", "神話"];
+const QUALITY_P = [1, 0.6, 0.3, 0.1, 0.02];
+function viewAffix() {
+  const tier = Math.max(0, Math.min(19, S.afTier | 0));
+  const et = effTierOf(tier);
+  const locks = Math.max(0, Math.min(4, S.afLocks | 0));
+  const deep = !!S.afDeep;
+  const rarity = Math.max(0, Math.min(4, S.afRarity | 0));
+  const rows = AFFIX_ROWS.map(([name, fn, pct]) => "<tr><td>" + esc(name) + "</td><td>" + affixSpan(fn(et), pct) + "</td></tr>").join("");
+  const billRows = [0, 1, 2, 3, 4].map((n) => "<tr" + (n === locks ? " class=\"sel\"" : "") + "><td>" + n + "</td><td>" + goldText(reforgeBill(tier, false, n)) + "</td><td>" + goldText(reforgeBill(tier, true, n)) + "</td><td>" + (1 + n) + " 顆</td><td>" + n + " 張</td></tr>").join("");
+  let stones = 0;
+  let gold = 0;
+  const steps = [];
+  for (let r = rarity; r < 5; r++) {
+    const tries = 1 / QUALITY_P[r];
+    const once = qualityBill(tier, r);
+    stones += tries;
+    gold += once * tries;
+    steps.push("<tr><td>" + esc(RARITY_NAME[r]) + " → " + esc(RARITY_NAME[r + 1]) + "</td><td>" + pctText(QUALITY_P[r]) + "%</td><td>" + goldText(once) + "</td><td>" + (Math.round(tries * 10) / 10) + "</td></tr>");
+  }
+  const tiers = TIER_NAMES.map((name, i) => "<option value=\"" + i + "\"" + (i === tier ? " selected" : "") + ">" + esc(name) + " · Lv." + (1 + 7 * i) + "</option>").join("");
+  const rares = RARITY_NAME.slice(0, 5).map((name, i) => "<option value=\"" + i + "\"" + (i === rarity ? " selected" : "") + ">" + esc(name) + "，" + i + " 條</option>").join("");
+  return "<article class=\"panel\"><h2>洗鍊</h2>"
+    + "<div class=\"lvbox\"><label>裝備 <select id=\"afTier\" aria-label=\"裝備階級\">" + tiers + "</select></label>"
+    + "<label>鎖定 <input id=\"afLocks\" type=\"number\" min=\"0\" max=\"4\" value=\"" + locks + "\"></label>"
+    + "<label><input id=\"afDeep\" type=\"checkbox\"" + (deep ? " checked" : "") + "> 高級洗鍊，連種類一起換</label></div>"
+    + "<p>這件現在洗一次：<b>" + goldText(reforgeBill(tier, deep, locks)) + "</b> 金幣，洗鍊石 <b>" + (1 + locks) + "</b> 顆" + (deep ? "（高級）" : "") + "，鎖定符 <b>" + locks + "</b> 張。不能把詞條全部鎖住。</p>"
+    + "<p class=\"muted\">數值在最大值的一半到滿值之間隨機。百分比取一位小數，其他至少是 1。地圖 12 起用等效階級，所以同一條詞條會比前一張圖高約 12%，不是每張只加固定幾點。額外傷害詞條目前關著，洗不出來。首領專屬的固定詞條不能洗掉，隨機詞條固定 2 條，再加品質提升多出來的。</p>"
+    + "<div class=\"tree-wrap\"><table><thead><tr><th>詞條</th><th>這階範圍</th></tr></thead><tbody>" + rows + "</tbody></table></div>"
+    + "<h3 class=\"sec\">鎖定幾條</h3>"
+    + "<div class=\"tree-wrap\"><table><thead><tr><th>鎖定</th><th>普通金幣</th><th>高級金幣</th><th>洗鍊石</th><th>鎖定符</th></tr></thead><tbody>" + billRows + "</tbody></table></div>"
+    + "<h3 class=\"sec\">品質提升</h3>"
+    + "<div class=\"lvbox\"><label>現在品質 <select id=\"afRarity\" aria-label=\"品質\">" + rares + "</select></label></div>"
+    + "<p>從" + esc(RARITY_NAME[rarity]) + "升到神話，期望 <b>" + (Math.round(stones * 10) / 10) + "</b> 顆品質石、<b>" + goldText(Math.round(gold)) + "</b> 金幣。失敗只掉一顆石頭和這次的金幣，詞條不變。成功多一條詞條。普通 0 條、精良 1、稀有 2、史詩 3、傳說 4、神話 5。</p>"
+    + "<div class=\"tree-wrap\"><table><thead><tr><th>這一次</th><th>成功率</th><th>金幣</th><th>期望次數</th></tr></thead><tbody>" + steps.join("") + "</tbody></table></div></article>";
+}
+const FULL_REFINE = [[7, 2], [9, 4], [10, 6], [11, 8], [12, 11], [13, 14], [14, 17], [15, 20]];
+const SET_Q = [1, 1.25, 1.5, 1.85, 2.2, 2.5];
+function setFullPct(tier, rarity) {
+  return Math.round((2 + (6 * tier) / 19) * SET_Q[rarity] * 10) / 10;
+}
+function viewSet() {
+  const tier = Math.max(0, Math.min(19, S.setTier | 0));
+  const rarity = Math.max(0, Math.min(5, S.setRarity | 0));
+  const count = Math.max(0, Math.min(8, S.setCount | 0));
+  const ref = Math.max(0, Math.min(15, S.setRef | 0));
+  const fullPct = setFullPct(tier, rarity);
+  const four = Math.round(fullPct * 5) / 10;
+  const setPct = count >= 8 ? fullPct : count >= 4 ? four : 0;
+  let gearPct = 0;
+  for (const [lv, pct] of FULL_REFINE) if (ref >= lv) gearPct = pct;
+  const next = FULL_REFINE.find(([lv]) => lv > ref);
+  const tiers = TIER_NAMES.map((name, i) => "<option value=\"" + i + "\"" + (i === tier ? " selected" : "") + ">" + esc(name) + "</option>").join("");
+  const rares = RARITY_NAME.map((name, i) => "<option value=\"" + i + "\"" + (i === rarity ? " selected" : "") + ">" + esc(name) + "</option>").join("");
+  const gearRows = FULL_REFINE.map(([lv, pct]) => "<tr" + (ref >= lv && (FULL_REFINE.find(([n]) => n > lv) || [99])[0] > ref ? " class=\"sel\"" : "") + "><td>八件都 ≥ +" + lv + "</td><td>攻擊、生命 +" + pct + "%</td></tr>").join("");
+  return "<article class=\"panel\"><h2>套裝和全身強化</h2>"
+    + "<div class=\"lvbox\"><label>系列 <select id=\"setTier\">" + tiers + "</select></label>"
+    + "<label>這套最低品質 <select id=\"setRarity\">" + rares + "</select></label>"
+    + "<label>件數 <input id=\"setCount\" type=\"number\" min=\"0\" max=\"8\" value=\"" + count + "\"></label>"
+    + "<label>八件裡最低強化 <input id=\"setRef\" type=\"number\" min=\"0\" max=\"15\" value=\"" + ref + "\"></label></div>"
+    + "<div class=\"kv\">"
+    + "<div><b>套裝</b><br>" + (setPct ? "攻擊、生命 +" + setPct + "%" : "不到 4 件，沒有") + "</div>"
+    + "<div><b>全身強化</b><br>" + (gearPct ? "攻擊、生命 +" + gearPct + "%" : "八件還沒同時到 +7") + "</div>"
+    + "<div><b>加在一起</b><br>攻擊、生命 +" + (Math.round((setPct + gearPct) * 10) / 10) + "%</div>"
+    + "</div>"
+    + "<p class=\"muted\">只算武器、頭、身體、手、腳、披風、戒指、項鍊。副手不算。首領專屬算它掉落的那張圖。4 到 7 件都是 8 件效果的一半，5 件不會比 4 件高。8 件才是滿的。品質看這一套裡最低的那件。身上若有兩套，只算加得比較多的那套。全身強化也只算達到的最高一階，+7 的 2% 不會再和 +15 的 20% 相加。" + (next ? " 下一階全身強化是八件都到 +" + next[0] + "，攻擊和生命 +" + next[1] + "%。" : " 已經是全身 +15。") + "</p>"
+    + "<p>這張圖 4 件是 +" + four + "%，8 件是 +" + fullPct + "%。品質從普通到神話的倍率是 1、1.25、1.5、1.85、2.2、2.5，乘在（2 ＋ 6 × 階級 ÷ 19）上。</p>"
+    + "<div class=\"tree-wrap\"><table><thead><tr><th>條件</th><th>加成</th></tr></thead><tbody>" + gearRows + "</tbody></table></div></article>";
 }
 function render(opt) {
   const ae = document.activeElement;
@@ -1305,6 +1407,14 @@ function onChange(e) {
   if (t.id === "rfBless") { S.rfBless = t.checked; render(); return; }
   if (t.id === "rfDust") { S.rfDust = t.checked; render(); return; }
   if (t.id === "rfCharm") { S.rfCharm = t.value; render(); return; }
+  if (t.id === "afTier") { S.afTier = Math.max(0, Math.min(19, parseInt(t.value, 10) || 0)); render(); return; }
+  if (t.id === "afLocks") { S.afLocks = Math.max(0, Math.min(4, parseInt(t.value, 10) || 0)); render(); return; }
+  if (t.id === "afDeep") { S.afDeep = t.checked; render(); return; }
+  if (t.id === "afRarity") { S.afRarity = Math.max(0, Math.min(4, parseInt(t.value, 10) || 0)); render(); return; }
+  if (t.id === "setTier") { S.setTier = Math.max(0, Math.min(19, parseInt(t.value, 10) || 0)); render(); return; }
+  if (t.id === "setRarity") { S.setRarity = Math.max(0, Math.min(5, parseInt(t.value, 10) || 0)); render(); return; }
+  if (t.id === "setCount") { S.setCount = Math.max(0, Math.min(8, parseInt(t.value, 10) || 0)); render(); return; }
+  if (t.id === "setRef") { S.setRef = Math.max(0, Math.min(15, parseInt(t.value, 10) || 0)); render(); return; }
   if (t.id === "over") {
     S.over = Math.max(1, Math.min(100, parseInt(t.value, 10) || 1));
     S.show = S.over;
