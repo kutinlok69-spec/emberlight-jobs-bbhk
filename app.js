@@ -40,7 +40,9 @@ const S = {
   pts: { str: 5, agi: 5, vit: 5, int: 5, dex: 5, luk: 5 },
   rfFrom: 6, rfTo: 10, rfTier: 9, rfKind: "weapon", rfBless: false, rfDust: false, rfCharm: "none",
   afTier: 9, afLocks: 0, afDeep: false, afRarity: 3,
-  setTier: 9, setRarity: 4, setCount: 8, setRef: 9
+  setTier: 9, setRarity: 4, setCount: 8, setRef: 9,
+  set2Tier: 9, set2Rarity: 4, set2Count: 4,
+  set3Tier: 10, set3Rarity: 4, set3Count: 4
 };
 S.skill = (BYJOB.paladin && BYJOB.paladin[0].id) || DATA.skills[0].id;
 
@@ -1096,6 +1098,78 @@ const SET_Q = [1, 1.25, 1.5, 1.85, 2.2, 2.5];
 function setFullPct(tier, rarity) {
   return Math.round((2 + (6 * tier) / 19) * SET_Q[rarity] * 10) / 10;
 }
+function setBonusPct(tier, rarity, count) {
+  const full = setFullPct(tier, rarity);
+  if (count >= 8) return full;
+  if (count >= 4) return Math.round(full * 5) / 10;
+  return 0;
+}
+function chooseSet(rows) {
+  const series = {};
+  const lowest = {};
+  for (const row of rows) {
+    if (row.count <= 0) continue;
+    series[row.tier] = (series[row.tier] || 0) + row.count;
+    lowest[row.tier] = Math.min(lowest[row.tier] ?? 9, row.rarity);
+  }
+  let set = null;
+  for (const [t, count] of Object.entries(series)) {
+    const rarity = lowest[t];
+    const pct = setBonusPct(Number(t), rarity, count);
+    if (pct > 0 && (!set || pct > set.pct)) set = { tier: Number(t), count, rarity, pct };
+  }
+  return set;
+}
+function clampSetRow(tier, rarity, count) {
+  return {
+    tier: Math.max(0, Math.min(19, tier | 0)),
+    rarity: Math.max(0, Math.min(5, rarity | 0)),
+    count: Math.max(0, Math.min(8, count | 0))
+  };
+}
+function setRowOptions(row) {
+  const tiers = TIER_NAMES.map((name, i) => "<option value=\"" + i + "\"" + (i === row.tier ? " selected" : "") + ">" + esc(name) + "</option>").join("");
+  const rares = RARITY_NAME.map((name, i) => "<option value=\"" + i + "\"" + (i === row.rarity ? " selected" : "") + ">" + esc(name) + "</option>").join("");
+  return { tiers, rares };
+}
+function twoSetHTML() {
+  const a = clampSetRow(S.set2Tier, S.set2Rarity, S.set2Count);
+  const b = clampSetRow(S.set3Tier, S.set3Rarity, S.set3Count);
+  const ao = setRowOptions(a);
+  const bo = setRowOptions(b);
+  const pa = setBonusPct(a.tier, a.rarity, a.count);
+  const pb = setBonusPct(b.tier, b.rarity, b.count);
+  const over = a.count + b.count > 8 ? "這兩列加起來超過 8 格，實際穿不下。下面照填入的件數算。" : "";
+  let result;
+  if (a.tier === b.tier) {
+    const count = a.count + b.count;
+    const rarity = Math.min(a.rarity, b.rarity);
+    const pct = setBonusPct(a.tier, rarity, count);
+    const band = count >= 8 ? "滿套" : count >= 4 ? "4 件那一檔" : "";
+    result = "甲和乙都是" + TIER_NAMES[a.tier] + "，件數合併成 " + count + " 件。"
+      + (pct ? "品質看最低的" + RARITY_NAME[rarity] + "，算 " + band + "，攻擊、生命 +" + pct + "%。" : "不到 4 件，套裝百分比是 0。");
+  } else if (pa === pb) {
+    const chosen = chooseSet([a, b]);
+    result = "甲 " + TIER_NAMES[a.tier] + "・" + RARITY_NAME[a.rarity] + " " + a.count + " 件是 +" + pa + "%。"
+      + "乙 " + TIER_NAMES[b.tier] + "・" + RARITY_NAME[b.rarity] + " " + b.count + " 件是 +" + pb + "%。"
+      + (chosen ? "兩邊一樣，留下階級較低的" + TIER_NAMES[chosen.tier] + "，攻擊、生命 +" + chosen.pct + "%。" : "兩邊都不到 4 件，套裝百分比是 0。");
+  } else {
+    const chosen = chooseSet([a, b]);
+    result = "甲 " + TIER_NAMES[a.tier] + "・" + RARITY_NAME[a.rarity] + " " + a.count + " 件是 +" + pa + "%。"
+      + "乙 " + TIER_NAMES[b.tier] + "・" + RARITY_NAME[b.rarity] + " " + b.count + " 件是 +" + pb + "%。"
+      + "套裝百分比取較高的" + TIER_NAMES[chosen.tier] + " +" + chosen.pct + "%。";
+  }
+  return "<h3 class=\"sec\">兩套同時穿</h3>"
+    + "<p class=\"muted\">比的是套裝那一個百分比。裝備自己的攻擊、詞條、強化兩邊都照算。不同系列各算各的，只留下比較高的一邊。百分比相同時留下階級較低的系列，例如晨露精良 4 件和珊瑚普通 4 件都是 +1.3%，留下晨露。同一個系列的件數合併，4 件加 4 件就是滿套，品質看最低的那件。全身強化看八格的強化，跟選中哪一套無關。</p>"
+    + (over ? "<p>" + esc(over) + "</p>" : "")
+    + "<div class=\"lvbox\"><span>甲</span><label>系列 <select id=\"set2Tier\">" + ao.tiers + "</select></label>"
+    + "<label>最低品質 <select id=\"set2Rarity\">" + ao.rares + "</select></label>"
+    + "<label>件數 <input id=\"set2Count\" type=\"number\" min=\"0\" max=\"8\" value=\"" + a.count + "\"></label></div>"
+    + "<div class=\"lvbox\"><span>乙</span><label>系列 <select id=\"set3Tier\">" + bo.tiers + "</select></label>"
+    + "<label>最低品質 <select id=\"set3Rarity\">" + bo.rares + "</select></label>"
+    + "<label>件數 <input id=\"set3Count\" type=\"number\" min=\"0\" max=\"8\" value=\"" + b.count + "\"></label></div>"
+    + "<p>" + esc(result) + "</p>";
+}
 function viewSet() {
   const tier = Math.max(0, Math.min(19, S.setTier | 0));
   const rarity = Math.max(0, Math.min(5, S.setRarity | 0));
@@ -1103,7 +1177,7 @@ function viewSet() {
   const ref = Math.max(0, Math.min(15, S.setRef | 0));
   const fullPct = setFullPct(tier, rarity);
   const four = Math.round(fullPct * 5) / 10;
-  const setPct = count >= 8 ? fullPct : count >= 4 ? four : 0;
+  const setPct = setBonusPct(tier, rarity, count);
   let gearPct = 0;
   for (const [lv, pct] of FULL_REFINE) if (ref >= lv) gearPct = pct;
   const next = FULL_REFINE.find(([lv]) => lv > ref);
@@ -1120,7 +1194,8 @@ function viewSet() {
     + "<div><b>全身強化</b><br>" + (gearPct ? "攻擊、生命 +" + gearPct + "%" : "八件還沒同時到 +7") + "</div>"
     + "<div><b>加在一起</b><br>攻擊、生命 +" + (Math.round((setPct + gearPct) * 10) / 10) + "%</div>"
     + "</div>"
-    + "<p class=\"muted\">只算武器、頭、身體、手、腳、披風、戒指、項鍊。副手不算。首領專屬算它掉落的那張圖。4 到 7 件都是 8 件效果的一半，5 件不會比 4 件高。8 件才是滿的。品質看這一套裡最低的那件。身上若有兩套，只算加得比較多的那套。全身強化也只算達到的最高一階，+7 的 2% 不會再和 +15 的 20% 相加。" + (next ? " 下一階全身強化是八件都到 +" + next[0] + "，攻擊和生命 +" + next[1] + "%。" : " 已經是全身 +15。") + "</p>"
+    + "<p class=\"muted\">只算武器、頭、身體、手、腳、披風、戒指、項鍊。副手不算。首領專屬算它掉落的那張圖。4 到 7 件都是 8 件效果的一半，5 件和 4 件一樣。8 件才是滿的。品質看這一套裡最低的那件。全身強化只算達到的最高一階，八件都 +15 時是攻擊、生命 +20%。" + (next ? " 下一階是八件都到 +" + next[0] + "，攻擊和生命 +" + next[1] + "%。" : "") + "</p>"
+    + twoSetHTML()
     + "<p>這張圖 4 件是 +" + four + "%，8 件是 +" + fullPct + "%。品質從普通到神話的倍率是 1、1.25、1.5、1.85、2.2、2.5，乘在（2 ＋ 6 × 階級 ÷ 19）上。</p>"
     + "<div class=\"tree-wrap\"><table><thead><tr><th>條件</th><th>加成</th></tr></thead><tbody>" + gearRows + "</tbody></table></div></article>";
 }
@@ -1323,6 +1398,12 @@ function onChange(e) {
   if (t.id === "setRarity") { S.setRarity = Math.max(0, Math.min(5, parseInt(t.value, 10) || 0)); render(); return; }
   if (t.id === "setCount") { S.setCount = Math.max(0, Math.min(8, parseInt(t.value, 10) || 0)); render(); return; }
   if (t.id === "setRef") { S.setRef = Math.max(0, Math.min(15, parseInt(t.value, 10) || 0)); render(); return; }
+  if (t.id === "set2Tier") { S.set2Tier = Math.max(0, Math.min(19, parseInt(t.value, 10) || 0)); render(); return; }
+  if (t.id === "set2Rarity") { S.set2Rarity = Math.max(0, Math.min(5, parseInt(t.value, 10) || 0)); render(); return; }
+  if (t.id === "set2Count") { S.set2Count = Math.max(0, Math.min(8, parseInt(t.value, 10) || 0)); render(); return; }
+  if (t.id === "set3Tier") { S.set3Tier = Math.max(0, Math.min(19, parseInt(t.value, 10) || 0)); render(); return; }
+  if (t.id === "set3Rarity") { S.set3Rarity = Math.max(0, Math.min(5, parseInt(t.value, 10) || 0)); render(); return; }
+  if (t.id === "set3Count") { S.set3Count = Math.max(0, Math.min(8, parseInt(t.value, 10) || 0)); render(); return; }
   if (t.id === "over") {
     S.over = Math.max(1, Math.min(100, parseInt(t.value, 10) || 1));
     S.show = S.over;
